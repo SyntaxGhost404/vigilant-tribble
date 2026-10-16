@@ -238,23 +238,32 @@ def walnut():
     warp = g.noise(g.comb(g.math('MULTIPLY', s, 0.008),
                           g.math('MULTIPLY', py_, 0.03),
                           g.math('MULTIPLY', t, 0.02)), 1.0, 2.0, 0.5)
+    wig = g.noise(g.comb(g.math('MULTIPLY', s, 0.03),
+                         g.math('MULTIPLY', t, 0.06),
+                         g.math('MULTIPLY', py_, 0.06)), 1.0, 3.0, 0.5)
     gc = g.math('ADD', g.math('ADD', t, g.math('MULTIPLY', py_, 0.3)),
-                g.math('MULTIPLY', warp, 6.0))
+                g.math('MULTIPLY', warp, 14.0))
+    gc = g.math('ADD', gc, g.math('MULTIPLY', wig, 3.0))
     # fine straight grain lines (noise squeezed along the grain)
     fine = g.noise(g.comb(g.math('MULTIPLY', s, 0.0035),
                           g.math('MULTIPLY', gc, 0.95), 0.0), 1.0, 8.0, 0.68)
     lines = g.maprange(fine, 0.47, 0.62, 0.0, 1.0, smooth=True)
     # medium streaks and large colour patches
     streak = g.noise(g.comb(g.math('MULTIPLY', s, 0.011),
-                            g.math('MULTIPLY', gc, 0.16),
+                            g.math('MULTIPLY', gc, 0.2),
                             g.math('MULTIPLY', py_, 0.04)), 1.0, 6.0, 0.6)
-    streak = g.maprange(streak, 0.32, 0.72, 0.0, 1.0, smooth=True)
+    streak = g.maprange(streak, 0.4, 0.62, 0.0, 1.0, smooth=True)
     patch = g.maprange(g.noise(pos, 0.018, 3.0, 0.5), 0.35, 0.65, 0.0, 1.0,
                        smooth=True)
     fig = g.noise(g.comb(g.math('MULTIPLY', s, 0.006),
                          g.math('MULTIPLY', gc, 0.07), 0.0), 1.0, 5.0, 0.6,
                   dist=0.3)
-    fig = g.maprange(fig, 0.55, 0.7, 0.0, 1.0, smooth=True)
+    fig = g.maprange(fig, 0.5, 0.66, 0.0, 1.0, smooth=True)
+    # broad dark bands running with the grain
+    bands = g.noise(g.comb(g.math('MULTIPLY', s, 0.004),
+                           g.math('MULTIPLY', gc, 0.045), 0.0), 1.0, 4.0, 0.55,
+                    dist=0.4)
+    bands = g.maprange(bands, 0.5, 0.64, 0.0, 1.0, smooth=True)
     # pores: short dark dashes along the grain
     pores = g.noise(g.comb(g.math('MULTIPLY', s, 0.5),
                            g.math('MULTIPLY', gc, 7.0),
@@ -280,18 +289,20 @@ def walnut():
     cav = g.math('SUBTRACT', 1.0, ao, clamp=True)
     edge = g.maprange(g.geo('Pointiness'), 0.5, 0.6, 0.0, 1.0)
     # colours (linear)
-    c_light = (0.33, 0.098, 0.032)
-    c_base = (0.165, 0.042, 0.014)
-    c_dark = (0.040, 0.011, 0.005)
+    c_light = (0.34, 0.105, 0.036)
+    c_base = (0.125, 0.034, 0.012)
+    c_dark = (0.032, 0.009, 0.004)
     col = g.mixc(streak, c_light, c_base)
+    col = g.mixc(g.math('MULTIPLY', streak, streak), col, (0.06, 0.017, 0.007))
     col = g.mixc(g.math('MULTIPLY', patch, 0.45), col, (0.12, 0.04, 0.016))
-    col = g.mixc(g.math('MULTIPLY', lines, 0.55), col, c_dark)
-    col = g.mixc(g.math('MULTIPLY', fig, 0.6), col, (0.055, 0.018, 0.007))
+    col = g.mixc(g.math('MULTIPLY', bands, 0.75), col, (0.045, 0.014, 0.006))
+    col = g.mixc(g.math('MULTIPLY', lines, 0.7), col, c_dark)
+    col = g.mixc(g.math('MULTIPLY', fig, 0.85), col, (0.035, 0.012, 0.005))
     col = g.mixc(g.math('MULTIPLY', pores, 0.6), col, (0.03, 0.01, 0.005))
     col = g.mixc(g.math('MULTIPLY', cav, 1.5), col, (0.025, 0.01, 0.006))
-    col = g.mixc(g.math('MULTIPLY', edge, 0.3), col, (0.42, 0.18, 0.075))
+    col = g.mixc(g.math('MULTIPLY', edge, 0.4), col, (0.36, 0.2, 0.11))
     col = g.mixc(g.math('MULTIPLY', scratches, 0.22), col, (0.36, 0.19, 0.10))
-    rough = g.math('ADD', 0.36, g.math('MULTIPLY', lines, 0.06))
+    rough = g.math('ADD', 0.44, g.math('MULTIPLY', lines, 0.06))
     rough = g.math('ADD', rough, g.math('MULTIPLY', pores, 0.2))
     rough = g.math('ADD', rough, g.math('MULTIPLY', cav, 0.25))
     rough = g.math('ADD', rough, g.math('MULTIPLY', scratches, 0.15))
@@ -335,22 +346,22 @@ def leather():
 
 
 def create_all():
-    brass_alb, brass_tar = (0.64, 0.45, 0.17), (0.10, 0.068, 0.025)
-    silver_alb, silver_tar = (0.82, 0.82, 0.83), (0.045, 0.043, 0.042)
+    brass_alb, brass_tar = (0.55, 0.38, 0.12), (0.075, 0.052, 0.02)
+    silver_alb, silver_tar = (0.71, 0.70, 0.69), (0.035, 0.033, 0.032)
     return {
         'walnut': walnut(),
         'brass_engraved': metal('Brass_Engraved', brass_alb, brass_tar, 0.45,
-                                engrave='barrel', rough=(0.26, 0.62),
-                                patina=0.6, grime_gain=1.1,
+                                engrave='barrel', rough=(0.3, 0.62),
+                                patina=0.7, grime_gain=1.2,
                                 relief_depth=0.00026),
         'brass': metal('Brass', brass_alb, brass_tar, 0.45,
-                       rough=(0.28, 0.62), patina=0.6),
+                       rough=(0.3, 0.62), patina=0.7),
         'silver_engraved': metal('Silver_Engraved', silver_alb, silver_tar,
-                                 0.5, engrave='lock', inlay='inlay',
-                                 rough=(0.18, 0.55), relief_depth=0.00014,
-                                 patina=0.1, grime_gain=0.7),
-        'silver': metal('Silver', silver_alb, silver_tar, 0.5,
-                        rough=(0.18, 0.55), patina=0.12),
+                                 0.6, engrave='lock', inlay='inlay',
+                                 rough=(0.24, 0.58), relief_depth=0.00014,
+                                 patina=0.15, grime_gain=0.8),
+        'silver': metal('Silver', silver_alb, silver_tar, 0.6,
+                        rough=(0.26, 0.6), patina=0.3),
         'steel': metal('Steel', (0.56, 0.56, 0.57), (0.07, 0.06, 0.05), 0.4,
                        rough=(0.3, 0.6), patina=0.25),
         'flint': stone(),

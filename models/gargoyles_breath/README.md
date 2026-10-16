@@ -65,10 +65,11 @@ pins.
 2. **Organic parts** (walnut stock and gargoyle head) are signed-distance-field
    sculpts meshed with marching cubes. The stock inflates the traced
    silhouette, with variable width and edge rounding, raised lock panels, and
-   barrel and ramrod channels. The head carries overlapping scale rows,
-   blade-like crest spikes, swept ears, an almond eye under a heavy brow,
-   carved flame reliefs, nostrils, fangs, and an open jaw that merges into the
-   grip strap.
+   barrel and ramrod channels. The head carries overlapping scale rows that
+   run down the bridge of the nose, blade-like crest spikes, swept ears, a
+   ring-lidded eye under a heavy brow, flowing flame locks with spiral curls
+   and incised lines between them, nostrils, fangs, and an open jaw that
+   merges into the grip strap.
 3. **Hard-surface parts.** The barrel and muzzle are clean lathe and prism
    meshes. The lock work, guard, trigger, side plate and screws are SDF
    profile extrusions and sweeps.

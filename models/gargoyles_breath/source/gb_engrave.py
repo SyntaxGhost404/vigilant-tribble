@@ -241,11 +241,11 @@ def barrel_height(W=4096, H=2048, seed=3):
     cv.stroke([(8.0, yc), (93.0, yc)], 0.3)
     cv.stroke([(109.0, yc), (190.0, yc)], 0.3)
     for (a, b, ph) in ((8.5, 93.5, 0.0), (108.5, 190.0, np.pi)):
-        rinceau(cv, a, b, yc + 2.75, 0.9, 10.4, 0.36, 0.32, phase=ph,
+        rinceau(cv, a, b, yc + 2.75, 0.9, 10.4, 0.42, 0.38, phase=ph,
                 seed=seed + 1, half_h=2.5)
         # mirror image for the lower half
         tmp = Canvas(L, C, W / L, ss=2, sy=H / C)
-        rinceau(tmp, a, b, yc + 2.75, 0.9, 10.4, 0.36, 0.32, phase=ph,
+        rinceau(tmp, a, b, yc + 2.75, 0.9, 10.4, 0.42, 0.38, phase=ph,
                 seed=seed + 1, half_h=2.5)
         mir = tmp.img.transpose(Image.FLIP_TOP_BOTTOM)
         # flip about the flat's centre line (yc) rather than the canvas
@@ -259,7 +259,7 @@ def barrel_height(W=4096, H=2048, seed=3):
         border(cv, 6.0, 192.0, y0, y1, 0.32)
         cv.stroke([(6.0, y0), (6.0, y1)], 0.32)
         cv.stroke([(192.0, y0), (192.0, y1)], 0.32)
-        rinceau(cv, 7.5, 190.5, yc, 1.6, 12.5, 0.48, 0.4, phase=ph,
+        rinceau(cv, 7.5, 190.5, yc, 2.0, 15.5, 0.62, 0.52, phase=ph,
                 seed=seed, half_h=flat_w / 2 - 0.6)
         band(cv, 1.4, y0 - 0.3, y1 + 0.3, 0.45, n=3, gap=1.1)
         band(cv, 188.0, y0 - 0.3, y1 + 0.3, 0.45, n=3, gap=1.1)

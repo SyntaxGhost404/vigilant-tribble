@@ -133,6 +133,9 @@ def barrel_octagon():
     """Octagonal breech section X 0..194 with octagon UVs (u along X)."""
     ring, sp = rounded_octagon(P.BARREL_INRADIUS, 0.9)
     n = len(ring)
+    # v = k/8 at the centre of flat k (the engraving is laid out that way);
+    # rounded_octagon starts its arc length at the corner before flat 0
+    sp = np.append(sp, 1.0) - sp[4]
     xs = np.linspace(0.0, 194.5, 40)
     v = []
     for x in xs:
@@ -147,7 +150,7 @@ def barrel_octagon():
             faces.append([i * n + j, i * n + j1, (i + 1) * n + j1,
                           (i + 1) * n + j])
             ua, ub = xs[i] / BARREL_UV_LEN, xs[i + 1] / BARREL_UV_LEN
-            va, vb = sp[j], (sp[j + 1] if j + 1 < n else 1.0)
+            va, vb = sp[j], sp[j + 1]
             uvs += [(ua, va), (ua, vb), (ub, vb), (ub, va)]
     # breech face and front face (fans)
     c0 = len(v)

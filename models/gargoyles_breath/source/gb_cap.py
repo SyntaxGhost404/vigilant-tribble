@@ -55,7 +55,7 @@ SIGMA = 12.0
 AXIS = [(247, 552), (235.5, 571.5), (220, 590), (212, 606), (209, 622),
         (207.5, 642), (213, 664), (223, 683)]
 
-EYE_C = (206.0, 615.0)
+EYE_C = (207.5, 614.5)
 
 
 def _cap_region():
@@ -118,78 +118,148 @@ class Head2D:
         R = S.rbf_field(X2, Z2, self.rc, SIGMA)[..., 0] * W
         return d, W, R
 
-    def surface_y(self, x, z):
-        """|Y| of the base head surface at side-view point (x, z) mm."""
-        d, W, R = self.maps(np.array([x]), np.array([z]))
-        d, W, R = float(d[0]), float(W[0]), float(R[0])
-        if d + R <= 0:
-            return W
-        q = R * R - (d + R) ** 2
-        return W - R + np.sqrt(max(q, 0.0))
-
 
 H2 = Head2D()
 
 
-def surf(x, y, yy_off=0.0, side=1):
-    """Point on the right/left head surface over ref px (x, y)."""
-    a, b = mm(x, y)
-    return (a, side * (H2.surface_y(a, b) + yy_off), b)
+JAW_POLY = P.to_mm(P.catmull_rom(JAW, 5, closed=True))
+JAW_HINGE = np.array(mm(240, 640))
+JAW_TIP = np.array(mm(266.4, 654.4))
+
+
+def _jaw_width(X2, Z2):
+    hv = JAW_TIP - JAW_HINGE
+    tt = np.clip(((X2 - JAW_HINGE[0]) * hv[0] + (Z2 - JAW_HINGE[1]) * hv[1]) /
+                 hv.dot(hv), 0, 1)
+    return 6.2 - 3.9 * tt ** 1.2
+
+
+def _skull(X, ay, Z):
+    """Brow ridge and cheekbone masses."""
+    brow = _chain(X, ay, Z, [mm3(196.5, 595, 17.8), mm3(198.5, 605, 19.6),
+                             mm3(200.0, 615, 20.2), mm3(203.5, 625, 19.2),
+                             mm3(208.5, 631, 17.6)],
+                  [2.8, 3.9, 3.7, 2.9, 1.8])
+    cx, cz = mm(226, 622)
+    cheek = S.ellipsoid(X, ay, Z, (cx, 15.0, cz), (6.0, 3.0, 6.5))
+    return brow, cheek
+
+
+def _base_pts(X, Y, Z):
+    """Head, jaw, brow and cheek (no scales, eye or reliefs) at points."""
+    ay = np.abs(Y)
+    d, W, R = H2.maps(X, Z)
+    W = W * (0.80 + 0.20 * S.smoothstep(0.0, -11.0, d))
+    R = np.minimum(R, 0.97 * W)
+    f = S.rounded_extrusion(d, ay - W, R)
+    wj = _jaw_width(X, Z)
+    dj = S.polygon_sdf2(X, Z, JAW_POLY)
+    f = S.smin(f, S.rounded_extrusion(dj, ay - wj, 0.9 * wj), 1.6)
+    brow, cheek = _skull(X, ay, Z)
+    f = S.smin(f, brow, 2.2)
+    return S.smin(f, cheek, 3.0)
+
+
+def _on_surface(pts_px, side, depth):
+    """Drop side-view points (ref px) onto the head surface on one side
+    (+1 / -1) and push them `depth` mm under it along the surface normal."""
+    xz = P.to_mm(pts_px)
+    n = len(xz)
+    ys = np.linspace(34.0, 0.0, 681)
+    X = np.repeat(xz[:, 0:1], len(ys), 1)
+    Z = np.repeat(xz[:, 1:2], len(ys), 1)
+    Y = np.broadcast_to(ys, X.shape)
+    f = _base_pts(X, Y, Z).astype(np.float64)
+    inside = f < 0
+    i = np.clip(np.argmax(inside, axis=1), 1, len(ys) - 1)
+    rows = np.arange(n)
+    f0, f1 = f[rows, i - 1], f[rows, i]
+    a = np.clip(f0 / np.maximum(f0 - f1, 1e-9), 0, 1)
+    ysurf = ys[i - 1] + (ys[i] - ys[i - 1]) * a
+    ysurf = np.where(inside.any(axis=1), ysurf, ys[np.argmin(f, axis=1)])
+    p = np.stack([xz[:, 0], side * ysurf, xz[:, 1]], 1)
+    e = 0.05
+    g = np.zeros_like(p)
+    for k in range(3):
+        dp = np.zeros(3)
+        dp[k] = e
+        hi = _base_pts(*(p + dp).T)
+        lo = _base_pts(*(p - dp).T)
+        g[:, k] = (hi - lo) / (2 * e)
+    g /= np.linalg.norm(g, axis=1, keepdims=True) + 1e-9
+    return p - g * np.asarray(depth, float)[:, None]
 
 
 # --------------------------------------------------------------- reliefs --
+def _flame(p0, p1, bend, curl, turn, rmax, n=22):
+    """S-shaped flame lock from p0 to p1 (ref px) ending in a spiral curl.
+
+    bend: sideways throw of the S (px); curl: start radius of the end
+    spiral (px, 0 = tapered end); turn: spiral direction (+1 / -1).
+    Returns (points px (N, 2), radii mm (N,)).
+    """
+    p0 = np.asarray(p0, float)
+    p1 = np.asarray(p1, float)
+    d = p1 - p0
+    nrm = np.array([-d[1], d[0]]) / np.linalg.norm(d)
+    c1 = p0 + d / 3.0 + nrm * bend
+    c2 = p0 + 2.0 * d / 3.0 - nrm * bend
+    t = np.linspace(0.0, 1.0, n)[:, None]
+    body = ((1 - t) ** 3 * p0 + 3 * (1 - t) ** 2 * t * c1 +
+            3 * (1 - t) * t ** 2 * c2 + t ** 3 * p1)
+    u = t[:, 0]
+    rad = rmax * (0.35 + 0.65 * S.smoothstep(0.0, 0.35, u))
+    if curl <= 0:
+        return body, rad * (1.0 - 0.6 * S.smoothstep(0.65, 1.0, u))
+    tan = body[-1] - body[-2]
+    tan /= np.linalg.norm(tan)
+    centre = p1 + turn * np.array([-tan[1], tan[0]]) * curl
+    th = np.linspace(0.0, 1.7 * np.pi, 18)[1:]
+    rho = curl * 0.3 ** (th / th[-1])
+    v = p1 - centre
+    ang = np.arctan2(v[1], v[0]) + turn * th
+    spiral = centre + rho[:, None] * np.stack([np.cos(ang), np.sin(ang)], 1)
+    srad = np.linspace(rad[-1], 0.45 * rmax, len(th))
+    return np.vstack([body, spiral]), np.concatenate([rad, srad])
+
+
+# (p0, p1, bend, curl, turn, radius mm), ref px of the right side view
+LOCKS = [
+    # flame locks flowing from under the eye down to the nose
+    ((191, 641), (201, 677), 3.5, 2.6, -1, 1.1),
+    ((199, 627), (198, 652), 4.0, 3.0, -1, 1.2),
+    ((204, 629), (205, 668), 4.5, 3.4, -1, 1.3),
+    ((210, 630), (214, 659), 4.2, 3.2, -1, 1.3),
+    ((216, 631), (223, 671), 4.5, 3.2, -1, 1.25),
+    ((222, 633), (230, 660), 3.6, 3.0, -1, 1.2),
+    ((228, 636), (236, 651), 2.0, 2.6, -1, 1.05),
+    # brow flame curling back over the eye
+    ((215, 607), (198, 602), 2.6, 3.6, 1, 1.25),
+    # cheek flames toward the mouth corner
+    ((222, 604), (233, 628), 2.8, 3.2, -1, 1.2),
+    ((228, 602), (238, 617), -1.6, 2.6, -1, 1.0),
+]
+
+
 def _flame_strokes():
-    """Flowing flame/fur lines down the snout and around the eye (ref px
-    paths, radius mm).  Generated as offset S-curves with curled ends."""
-    out = []
-    # snout flames: start under the eye / cheek, flow to the nose
-    base = np.array([(0.0, 0.0), (2.0, 9.0), (1.0, 18.0), (2.6, 27.0),
-                     (5.6, 35.0), (9.0, 41.0)])
-    starts = [(203.0, 631.0), (207.5, 633.5), (212.5, 634.0), (217.5, 633.0),
-              (222.0, 634.5), (226.5, 637.0), (231.0, 641.0)]
-    lens = [0.95, 1.0, 0.98, 0.92, 0.84, 0.72, 0.55]
-    for k, (sx, sy) in enumerate(starts):
-        p = base * np.array([1.0 + 0.04 * k, lens[k]]) + np.array([sx, sy])
-        end = p[-1]
-        d = p[-1] - p[-2]
-        d /= np.linalg.norm(d)
-        n = np.array([-d[1], d[0]]) * (1 if k % 2 else -1)
-        curl = [end + 1.6 * d + 1.2 * n, end + 1.4 * d + 2.8 * n,
-                end + 0.2 * d + 3.1 * n, end - 0.5 * d + 2.0 * n]
-        path = np.vstack([p, curl if k % 3 != 2 else curl[:2]])
-        out.append((path, 1.05 - 0.04 * k))
-    # eye flames: curl from the brow end round the eye and back to the crown
-    out.append((np.array([(199, 627), (203, 631.5), (209, 631.5), (214, 627),
-                          (216.5, 620), (216, 612), (213.5, 606)]), 1.0))
-    out.append((np.array([(213, 604), (210, 597.5), (205, 593.5),
-                          (199.5, 593.5), (196.5, 597), (198.5, 600.5)]), 0.95))
-    # nasal bridge wrinkles (short arcs across the top of the snout)
-    for k, yy in enumerate((660.0, 667.0, 673.5)):
-        out.append((np.array([(186.0 + 4.5 * k, yy - 4.0),
-                              (189.5 + 4.5 * k, yy - 1.0),
-                              (194.0 + 4.6 * k, yy)]), 0.8))
-    # flame tuft behind the eye toward the crown
-    out.append((np.array([(196, 628), (191, 621), (189.5, 612), (192, 604),
-                          (196.5, 601.5), (199, 605), (196.6, 607.6)]), 0.95))
-    # cheek tuft sweeping back toward the ear
-    out.append((np.array([(236, 646), (231, 636), (226.5, 627), (224.5, 618),
-                          (226, 610.5), (229.5, 608), (231.5, 611.5),
-                          (229.4, 614)]), 1.0))
-    out.append((np.array([(239, 652), (234.6, 642), (230.5, 633),
-                          (229.6, 625)]), 0.85))
-    # jowl flames between the eye and the throat
-    out.append((np.array([(242.5, 629), (237.6, 620), (234.6, 611),
-                          (235.4, 603), (239.0, 599.4), (241.6, 602.6),
-                          (239.6, 605.6)]), 0.9))
-    out.append((np.array([(246.0, 619.5), (242.0, 611.5), (240.6, 604.0)]),
-                0.7))
-    out.append((np.array([(221.5, 640.0), (218.6, 630.4), (219.6, 621.0),
-                          (223.6, 616.2), (227.0, 618.6), (225.4, 622.0)]),
-                0.85))
-    return out
+    """Raised flame locks (ridges) and the fine incised lines between them.
+    Returns (ridges, lines): lists of (points px, radii mm)."""
+    ridges = [_flame(*lk) for lk in LOCKS]
+    lines = []
+    face = ridges[:7]
+    n = 22                           # points in each lock's S-curve body
+    for a, b in zip(face[:-1], face[1:]):
+        mid = 0.5 * (a[0][:n] + b[0][:n])
+        u = np.linspace(0, 1, n)
+        lines.append((mid[2:-1], 0.42 * np.sin(np.pi * u[2:-1]) ** 0.5 + 0.08))
+    for a in face:
+        off = a[0][:n] + np.array([-1.7, 0.4])
+        u = np.linspace(0, 1, n)
+        lines.append((off[3:-3], 0.36 * np.sin(np.pi * u[3:-3]) ** 0.5 + 0.06))
+    return ridges, lines
 
 
-RELIEFS = _flame_strokes()
+RIDGES, LINES = _flame_strokes()
 
 
 class CapField:
@@ -201,14 +271,8 @@ class CapField:
         self.d_head = d.astype(np.float32)
         self.W = W.astype(np.float32)
         self.R = R.astype(np.float32)
-        self.d_jaw = S.polygon_sdf2(X2, Z2, P.to_mm(
-            P.catmull_rom(JAW, 5, closed=True)))
-        hinge = np.array(mm(240, 640))
-        tip = np.array(mm(266.4, 654.4))
-        tt = np.clip(((X2 - hinge[0]) * (tip[0] - hinge[0]) +
-                      (Z2 - hinge[1]) * (tip[1] - hinge[1])) /
-                     np.sum((tip - hinge) ** 2), 0, 1)
-        self.Wj = (6.2 - 3.9 * tt ** 1.2).astype(np.float32)
+        self.d_jaw = S.polygon_sdf2(X2, Z2, JAW_POLY)
+        self.Wj = _jaw_width(X2, Z2).astype(np.float32)
         self.region = S.polygon_sdf2(X2, Z2, _cap_region())
         # scale layout: arc-length + offset relative to the medial axis
         ax = P.to_mm(P.catmull_rom(AXIS, 10))
@@ -227,15 +291,13 @@ class CapField:
         self._prep_reliefs()
 
     def _prep_reliefs(self):
-        self.reliefs = []
-        for path, r in RELIEFS:
-            for sd in (-1, 1):
-                pts = [surf(x, y, -0.42 * r, sd) for x, y in
-                       P.catmull_rom(path, 4)]
-                nn = len(pts)
-                rr = [1.25 * r * (0.45 + 0.55 * np.sin(np.pi * min(
-                    1.0, (k + 0.7) / nn)) ** 0.6) for k in range(nn)]
-                self.reliefs.append((pts, rr))
+        self.ridges = []
+        self.lines = []
+        for sd in (-1, 1):
+            for pts, rr in RIDGES:
+                self.ridges.append((_on_surface(pts, sd, 0.42 * rr), rr))
+            for pts, rr in LINES:
+                self.lines.append((_on_surface(pts, sd, 0.05 * rr), rr))
 
     # ----------------------------------------------------------- scales ---
     def scale_height(self, X, Y, Z, s, t):
@@ -266,13 +328,17 @@ class CapField:
                 h = np.maximum(h, prof)
         return h
 
-    def scale_mask(self, s, t, Y):
+    def scale_mask(self, s, t, X, Y, Z):
         phi = np.abs(np.arctan2(Y, t))
-        # s measured from the axis start (inside the grip)
-        lim = np.where(phi < 0.95, 70.0, np.where(phi < 1.75, 50.0, 30.0))
+        # s runs from inside the grip toward the nose: the scales cover the
+        # bridge of the nose and the upper cheek, the mouth side stays bare
+        lim = np.interp(phi, [0.0, 0.9, 1.35, 1.8, 2.25],
+                        [84.0, 82.0, 72.0, 58.0, 32.0])
         m = S.smoothstep(lim, lim - 5.0, s)
         m = m * S.smoothstep(2.65, 2.25, phi)
-        return m
+        ex, ez = mm(*EYE_C)
+        de = np.sqrt((X - ex) ** 2 + (np.abs(Y) - 18.0) ** 2 + (Z - ez) ** 2)
+        return m * S.smoothstep(5.5, 9.0, de)
 
     # ----------------------------------------------------------- field ----
     def eval_points(self, X, Y, Z, ix, iz):
@@ -294,7 +360,7 @@ class CapField:
         # scales on crown / neck / dorsal ridge
         s = self.ax_s[ix, iz].astype(np.float64)
         t = self.ax_t[ix, iz].astype(np.float64)
-        m = self.scale_mask(s, t, Y)
+        m = self.scale_mask(s, t, X, Y, Z)
         near = (m > 0.01) & (np.abs(f) < 1.8)
         if np.any(near):
             h = self.scale_height(X[near], Y[near], Z[near], s[near], t[near])
@@ -307,36 +373,27 @@ class CapField:
     def _face(self, f, X, Y, Z, ay):
         ex, ez = mm(*EYE_C)
         # skull masses: brow ridge, cheekbone, jowl
-        brow = _chain(X, ay, Z, [mm3(196.5, 595, 17.8), mm3(198.5, 605, 19.6),
-                                 mm3(200.0, 615, 20.2), mm3(203.5, 625, 19.2),
-                                 mm3(208.5, 631, 17.6)],
-                      [2.8, 3.9, 3.7, 2.9, 1.8])
+        brow, cheek = _skull(X, ay, Z)
         f = S.smin(f, brow, 2.2)
-        cheek = S.ellipsoid(X, ay, Z, (*[mm(226, 622)[0]], 15.0,
-                                       mm(226, 622)[1]), (6.0, 3.0, 6.5))
         f = S.smin(f, cheek, 3.0)
-        # almond eye in a socket under the brow (long axis along the head)
+        # round eye with a ring lid, heavier on the dorsal side, set in a
+        # socket under the brow
         ax, az = -0.218, -0.976
         def eyept(a, b, yy):      # a along the head axis, b toward dorsal
             return (ex + a * ax + b * (-az), yy, ez + a * az + b * ax)
-        sock = S.capsule(X, ay, Z, eyept(-3.2, 0.0, 21.0),
-                         eyept(3.4, 0.3, 21.0), 2.7)
+        sock = S.capsule(X, ay, Z, eyept(-1.8, 0.0, 21.2),
+                         eyept(2.0, 0.2, 21.2), 3.1)
         f = S.smax(f, -sock, 0.8)
-        ec = eyept(0.1, 0.1, 17.6)
-        eye = S.ellipsoid(X, ay, Z, ec, (2.5, 2.3, 4.2))
+        eye = S.ellipsoid(X, ay, Z, eyept(0.1, 0.1, 17.7), (2.7, 2.4, 3.2))
         f = np.minimum(f, eye)
-        lid_u = _chain(X, ay, Z, [eyept(-5.0, 0.4, 18.6), eyept(-1.6, 2.6, 20.3),
-                                  eyept(2.2, 2.8, 20.4), eyept(5.4, 0.6, 18.8),
-                                  eyept(7.6, -1.6, 17.6)],
-                       [0.6, 1.45, 1.4, 0.8, 0.4])
-        lid_l = _chain(X, ay, Z, [eyept(-4.2, -0.5, 18.4),
-                                  eyept(-1.0, -2.0, 19.3),
-                                  eyept(2.4, -2.0, 19.3),
-                                  eyept(4.6, -0.6, 18.5)],
-                       [0.45, 0.7, 0.7, 0.45])
-        f = S.smin(f, np.minimum(lid_u, lid_l), 0.45)
-        pupil = S.capsule(X, ay, Z, eyept(-1.4, 0.2, 19.45),
-                          eyept(1.6, 0.25, 19.45), 0.36)
+        th = np.linspace(0.0, 2.0 * np.pi, 17)
+        ring = [eyept(3.7 * np.cos(q), 3.2 * np.sin(q) + 0.1,
+                      19.3 + 0.7 * max(np.sin(q), 0.0)) for q in th]
+        lids = _chain(X, ay, Z, ring,
+                      [0.5 + 0.5 * max(np.sin(q), 0.0) for q in th])
+        f = S.smin(f, lids, 0.45)
+        pupil = S.capsule(X, ay, Z, eyept(-1.7, 0.2, 19.55),
+                          eyept(1.7, 0.25, 19.55), 0.38)
         f = np.maximum(f, -pupil)
         # swept-back ears: concave blades rising toward the grip
         eb = mm3(213.5, 600.0, 19.0)
@@ -391,14 +448,19 @@ class CapField:
         barb = S.round_cone(X, Y, Z, mm3(257.5, 657.8, 0.0),
                             mm3(268.2, 655.0, 0.0), 2.5, 0.12)
         f = S.smin(f, barb, 0.8)
-        # relief flames
-        for pts, rr in self.reliefs:
-            m = _bbox_mask(X, Y, Z, pts, 2.0)
+        # flame locks in low relief, fine incised lines between them
+        for pts, rr in self.ridges:
+            m = _bbox_mask(X, Y, Z, pts, float(np.max(rr)) + 1.0)
             if np.any(m):
                 g = _chain(X[m], Y[m], Z[m], pts, rr)
-                ff = f[m]
                 f = f.copy()
-                f[m] = S.smin(ff, g.astype(ff.dtype), 0.75)
+                f[m] = S.smin(f[m], g.astype(f.dtype), 0.3)
+        for pts, rr in self.lines:
+            m = _bbox_mask(X, Y, Z, pts, float(np.max(rr)) + 0.6)
+            if np.any(m):
+                g = _chain(X[m], Y[m], Z[m], pts, rr)
+                f = f.copy()
+                f[m] = S.smax(f[m], -g.astype(f.dtype), 0.12)
         return f
 
     def _crest(self, f, X, Y, Z):
