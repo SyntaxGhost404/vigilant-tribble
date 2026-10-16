@@ -64,6 +64,8 @@ def decimate(ob, ratio):
     m.ratio = ratio
     m.use_collapse_triangulate = True
     apply_modifiers(ob)
+    # collapsing can leave a few duplicate or zero-area faces behind
+    ob.data.validate()
     return ob
 
 

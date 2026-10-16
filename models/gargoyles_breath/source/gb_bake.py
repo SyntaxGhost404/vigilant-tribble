@@ -349,6 +349,15 @@ def main(blend_in, out_dir, max_res=None):
     for img in list(bpy.data.images):
         if img.source == 'GENERATED':
             bpy.data.images.remove(img)
+    save_outputs(out_dir)
+
+
+def save_outputs(out_dir):
+    """Save GargoylesBreath.blend, then export GargoylesBreath.glb with only
+    the atlas UVs."""
+    for ob in bpy.data.objects:
+        if ob.type == 'MESH':
+            ob.data.validate()
     bpy.ops.file.make_paths_relative()
     blend_out = os.path.join(out_dir, 'GargoylesBreath.blend')
     bpy.ops.wm.save_as_mainfile(filepath=blend_out, compress=True,
